@@ -125,7 +125,7 @@ scripts/make-icon.swift  regenerates the app icon
 
 ## Credits
 
-The protocol comes from [parsiya/f108-pro](https://github.com/parsiya/f108-pro): Ghidra work on the Windows driver, USB captures and hardware verification, including the flash-overflow finding above. This project would not exist without it.
+Protocol reverse engineering: [parsiya/f108-pro](https://github.com/parsiya/f108-pro). The command set, the LCD upload sequence and the 141-frame limit all come from that work.
 
 ## Support
 
