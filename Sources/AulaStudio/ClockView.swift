@@ -2,39 +2,48 @@ import SwiftUI
 
 struct ClockView: View {
     @Environment(AppModel.self) private var model
+    @AppStorage("autoSyncClock") private var autoSync = true
 
     var body: some View {
-        @Bindable var model = model
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                PageHeader(title: "Clock", subtitle: "The keyboard's screen clock drifts and resets when it loses power. Sync it to this Mac.")
-
-                TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                    VStack(spacing: 4) {
-                        Text(ctx.date.formatted(date: .omitted, time: .standard))
-                            .font(.system(size: 54, weight: .light, design: .rounded).monospacedDigit())
-                        Text(ctx.date.formatted(date: .complete, time: .omitted))
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 28)
-                    .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 16))
+        Page {
+            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                VStack(spacing: 4) {
+                    Text(ctx.date.formatted(date: .omitted, time: .standard))
+                        .font(.system(size: 56, weight: .light, design: .rounded).monospacedDigit())
+                    Text(ctx.date.formatted(date: .complete, time: .omitted))
+                        .foregroundStyle(.secondary)
                 }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 32)
+                .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .accessibilityElement(children: .combine)
+            }
 
-                WiredRequiredNote()
+            WiredNotice(message: "The clock is set over USB. Use the cable and set the mode switch to wired.")
 
-                HStack {
-                    Toggle("Sync automatically when the keyboard is plugged in", isOn: $model.autoSyncClock)
-                    Spacer()
-                    Button("Sync Now") { model.syncClock() }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                        .disabled(!model.isWired || model.busy)
+            EmbeddedForm {
+                Section {
+                    Toggle("Sync when the keyboard is plugged in", isOn: $autoSync)
+                    LabeledContent("Last synced") {
+                        if let d = model.lastClockSync {
+                            Text(d.formatted(date: .omitted, time: .shortened))
+                        } else {
+                            Text("Not this session")
+                        }
+                    }
+                } footer: {
+                    Text("The screen clock drifts and resets when the keyboard loses power. Syncing sets it to this Mac's time.")
+                        .foregroundStyle(.secondary)
                 }
             }
-            .padding(28)
-            .frame(maxWidth: 720)
-            .frame(maxWidth: .infinity)
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                PrimaryToolbarButton(title: "Sync Now", symbol: "arrow.triangle.2.circlepath", enabled: model.isWired && !model.busy,
+                                     help: model.isWired ? "Set the keyboard clock to this Mac's time (⌘↩)" : "Connect the keyboard over USB in wired mode") {
+                    model.syncClock()
+                }
+            }
         }
     }
 }

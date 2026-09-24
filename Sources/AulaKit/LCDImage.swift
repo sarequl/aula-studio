@@ -34,8 +34,8 @@ public struct LCDImage {
 
     public var totalDuration: Double { delays.reduce(0, +) }
     public var pageCount: Int { profile.pageCount(frames: frames.count) }
-    /// Rough wall-clock upload time (64 interrupt packets per page at 1 ms each, plus overhead).
-    public var estimatedUploadSeconds: Double { Double(pageCount) * 0.07 + 1 }
+    /// Rough wall-clock upload time. Measured on hardware: ~150 ms per 4 KB page including the ack.
+    public var estimatedUploadSeconds: Double { Double(pageCount) * 0.15 + 1 }
 }
 
 // MARK: Loading

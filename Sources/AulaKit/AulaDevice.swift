@@ -132,7 +132,8 @@ public final class AulaDevice {
         Thread.sleep(forTimeInterval: F108.commandDelay)
         if readback {
             let resp = try getFeature()
-            if resp[3] != 0x01 { log?("warning: no ACK for \(hex(payload.prefix(2)))") }
+            // Only `04 xx` commands answer with an ACK flag; data packets are echoed back.
+            if payload.first == 0x04, resp[3] != 0x01 { log?("warning: no ACK for \(hex(payload.prefix(2)))") }
             Thread.sleep(forTimeInterval: F108.commandDelay)
         }
     }
@@ -205,7 +206,7 @@ public final class AulaDevice {
     }
 
     /// Uploads a buffer built by `LCDImage.encode`. Blocks for the whole transfer
-    /// (roughly 70 ms per 4 KB page, so a full 141-frame animation takes ~2.5 min).
+    /// (about 150 ms per 4 KB page, so a full 141-frame animation takes ~5.5 min).
     public func uploadScreen(_ buffer: Data, progress: ((Int, Int) -> Void)? = nil) throws {
         // Re-validate here as the last line of defence for the flash layout.
         guard !buffer.isEmpty, buffer.count % F108.pageSize == 0 else {

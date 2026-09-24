@@ -7,28 +7,35 @@ struct LightingView: View {
 
     var body: some View {
         @Bindable var model = model
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                PageHeader(title: "Lighting", subtitle: "Key backlight effect. The side light bar is only adjustable from the keyboard itself.")
+        Page {
+            WiredNotice(message: "Lighting is set directly on the keyboard. Use the USB cable and set the mode switch to wired.")
 
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 116), spacing: 8)], spacing: 8) {
-                    ForEach(LightingMode.allCases) { mode in
-                        ModeChip(mode: mode, selected: model.lighting.mode == mode) {
-                            model.lighting.mode = mode
-                            model.lightingChanged()
+            EmbeddedForm {
+                Section {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 8)], spacing: 8) {
+                        ForEach(LightingMode.allCases) { mode in
+                            ModeChip(mode: mode, selected: model.lighting.mode == mode) {
+                                model.lighting.mode = mode
+                                model.lightingChanged()
+                            }
                         }
                     }
+                    .padding(.vertical, 4)
+                } header: {
+                    Text("Effect")
+                } footer: {
+                    Text("Key backlight only. The side light bar is set from the keyboard itself.")
+                        .foregroundStyle(.secondary)
                 }
 
                 if model.lighting.mode != .off {
-                    Form {
+                    Section("Settings") {
                         LabeledContent("Color") {
-                            HStack(spacing: 14) {
+                            HStack(spacing: 12) {
                                 Toggle("Rainbow", isOn: bind(\.colorful))
-                                ColorPicker("", selection: colorBinding, supportsOpacity: false)
+                                ColorPicker("Color", selection: colorBinding, supportsOpacity: false)
                                     .labelsHidden()
                                     .disabled(model.lighting.colorful)
-                                    .opacity(model.lighting.colorful ? 0.4 : 1)
                             }
                         }
                         LabeledContent("Brightness") { stepSlider(\.brightness) }
@@ -39,25 +46,22 @@ struct LightingView: View {
                         }
                         .pickerStyle(.segmented)
                     }
-                    .formStyle(.grouped)
-                    .scrollDisabled(true)
-                    .padding(.horizontal, -20)
                 }
 
-                WiredRequiredNote()
-
-                HStack {
-                    Toggle("Apply changes instantly", isOn: $model.liveLighting)
-                    Spacer()
-                    Button("Apply") { model.applyLighting() }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                        .disabled(!model.isWired || model.busy)
+                Section {
+                    Toggle("Apply changes as you make them", isOn: $model.liveLighting)
                 }
             }
-            .padding(28)
-            .frame(maxWidth: 720)
-            .frame(maxWidth: .infinity)
+            .disabled(!model.isWired)
+            .opacity(model.isWired ? 1 : 0.6)
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                PrimaryToolbarButton(title: "Apply", symbol: "checkmark.circle.fill", enabled: model.isWired && !model.busy,
+                                     help: model.isWired ? "Set this effect on the keyboard (⌘↩)" : "Connect the keyboard over USB in wired mode") {
+                    model.applyLighting()
+                }
+            }
         }
     }
 
@@ -67,13 +71,16 @@ struct LightingView: View {
     }
 
     private func stepSlider(_ kp: WritableKeyPath<LightingConfig, UInt8>) -> some View {
-        HStack {
+        HStack(spacing: 8) {
             Slider(value: Binding(get: { Double(model.lighting[keyPath: kp]) },
                                   set: { model.lighting[keyPath: kp] = UInt8($0.rounded()) }),
                    in: 0...5, step: 1) { editing in
                 if !editing { model.lightingChanged() }
             }
-            Text("\(model.lighting[keyPath: kp])").monospacedDigit().frame(width: 16, alignment: .trailing)
+            Text("\(model.lighting[keyPath: kp])")
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .frame(width: 16, alignment: .trailing)
         }
     }
 
@@ -84,36 +91,40 @@ struct LightingView: View {
                       blue: Double(model.lighting.blue) / 255)
             },
             set: { c in
-                guard let ns = NSColor(c).usingColorSpace(.sRGB) else { return }
-                model.lighting.red = UInt8((ns.redComponent * 255).rounded().clamped(0, 255))
-                model.lighting.green = UInt8((ns.greenComponent * 255).rounded().clamped(0, 255))
-                model.lighting.blue = UInt8((ns.blueComponent * 255).rounded().clamped(0, 255))
+                let (r, g, b) = AppModel.rgb(c)
+                model.lighting.red = r
+                model.lighting.green = g
+                model.lighting.blue = b
                 model.lightingChanged()
             })
     }
-}
-
-private extension CGFloat {
-    func clamped(_ lo: CGFloat, _ hi: CGFloat) -> CGFloat { Swift.min(Swift.max(self, lo), hi) }
 }
 
 struct ModeChip: View {
     let mode: LightingMode
     let selected: Bool
     let action: () -> Void
+    @Environment(\.isEnabled) private var enabled
 
     var body: some View {
         Button(action: action) {
-            Text(mode.name)
-                .font(.callout.weight(selected ? .semibold : .regular))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 9)
-                .background(selected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.08),
-                            in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(selected ? Color.accentColor : .clear, lineWidth: 1.5))
-                .contentShape(Rectangle())
+            HStack(spacing: 6) {
+                if selected {
+                    Image(systemName: "checkmark").font(.caption.weight(.bold))
+                }
+                Text(mode.name).lineLimit(1).minimumScaleFactor(0.85)
+            }
+            .font(.callout.weight(selected ? .semibold : .regular))
+            .foregroundStyle(selected ? Color.accentColor : .primary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(selected ? Color.accentColor.opacity(0.15) : Color.primary.opacity(0.05),
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(selected ? Color.accentColor : Color.primary.opacity(0.08), lineWidth: selected ? 1.5 : 1))
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
