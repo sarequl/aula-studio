@@ -1,6 +1,7 @@
 import AulaKit
 import Foundation
 import ImageIO
+import AppKit
 
 let usage = """
 usage: aula [-v] <command>
@@ -16,7 +17,7 @@ usage: aula [-v] <command>
   gradient <sunset|ocean|aurora|ember|mono|candy> [--static] [--out file|send]
   light <mode> [RRGGBB] [--brightness 0-5] [--speed 0-5] [--dir 0|1] [--rainbow]
   modes                           list lighting modes
-  keys <key=RRGGBB ...> [--all RRGGBB] [--brightness 0-5]
+  keys <key=RRGGBB ...> [--all RRGGBB] [--rainbow] [--brightness 0-5]
                                   per-key colors; keys not given are off (e.g. keys wasd=00FF00 esc=FF0000)
   keynames                        list key names for `keys` and `remap`
   remap <key=target ...> [--fn]   set the whole remap layer; keys not given return to factory
@@ -123,6 +124,13 @@ do {
         let layout = KeyLayout.f108Pro
         if let all = option("--all").flatMap(parseHex) {
             for k in layout.keys { colors[k.light] = all }
+        }
+        if flag("--rainbow") {
+            for k in layout.keys {
+                let h = (k.x + k.width / 2) / layout.widthUnits
+                let c = NSColor(hue: h, saturation: 1, brightness: 1, alpha: 1).usingColorSpace(.sRGB)!
+                colors[k.light] = (UInt8(c.redComponent * 255), UInt8(c.greenComponent * 255), UInt8(c.blueComponent * 255))
+            }
         }
         for a in args {
             let parts = a.split(separator: "=", maxSplits: 1)
