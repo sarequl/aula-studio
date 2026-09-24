@@ -99,6 +99,8 @@ struct ContentView: View {
                 }
                 Section("Keyboard") {
                     row(.lighting)
+                    row(.keys)
+                    row(.remap)
                     row(.clock)
                 }
             }
@@ -156,6 +158,8 @@ struct ContentView: View {
         case .library: LibraryView()
         case .text: TextView()
         case .lighting: LightingView()
+        case .keys: KeysView()
+        case .remap: RemapView()
         case .clock: ClockView()
         }
     }

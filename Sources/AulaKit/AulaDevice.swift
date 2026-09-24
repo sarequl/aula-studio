@@ -191,6 +191,81 @@ public final class AulaDevice {
         try finalize()
     }
 
+    /// Sets individual key colors. Keys not in `colors` go dark. `brightness` 0...5.
+    /// Sequence (from the vendor app): light-strip preamble, then `04 23` with a
+    /// 576-byte table of (index, r, g, b) per light index, trailer 55 AA.
+    public func setPerKeyColors(_ colors: [UInt8: (r: UInt8, g: UInt8, b: UInt8)], brightness: UInt8 = 5) throws {
+        // Preamble: begin -> lighting init -> brightness -> apply -> finalize.
+        try begin()
+        var initCmd = [UInt8](repeating: 0, count: 64)
+        initCmd[0] = 0x04; initCmd[1] = 0x13; initCmd[8] = 0x01
+        try command(initCmd)
+        var pre = [UInt8](repeating: 0, count: 64)
+        pre[0] = 0x80
+        pre[9] = min(brightness, 5)
+        pre[14] = 0x55; pre[15] = 0xAA
+        try command(pre, readback: false)
+        try apply()
+        try finalize()
+
+        // Per-key table.
+        try begin()
+        var keyInit = [UInt8](repeating: 0, count: 64)
+        keyInit[0] = 0x04; keyInit[1] = 0x23; keyInit[8] = 0x09   // 0x09 = RGB mode
+        try command(keyInit)
+
+        let size = 0x240
+        var table = [UInt8](repeating: 0, count: size)
+        for (idx, c) in colors {
+            let off = Int(idx) * 4
+            guard idx > 0, off + 3 < size - 2 else { continue }
+            table[off] = idx
+            table[off + 1] = c.r
+            table[off + 2] = c.g
+            table[off + 3] = c.b
+        }
+        table[size - 2] = 0x55
+        table[size - 1] = 0xAA
+        for chunk in stride(from: 0, to: size, by: F108.reportSize) {
+            try setFeature(Array(table[chunk..<chunk + F108.reportSize]))
+            Thread.sleep(forTimeInterval: F108.commandDelay)
+        }
+        try getFeature()
+        Thread.sleep(forTimeInterval: F108.commandDelay)
+
+        try apply()
+        try command([0x04, 0xF0])   // this finalize is read back, unlike the lighting one
+    }
+
+    /// Sends a complete remap table for one layer. Keys absent from `map` return to
+    /// factory behaviour, so an empty map is a reset. `04 11` normal layer, `04 27` FN layer.
+    public func setRemap(_ map: KeyMap, fnLayer: Bool = false) throws {
+        try begin()
+        var initCmd = [UInt8](repeating: 0, count: 64)
+        initCmd[0] = 0x04; initCmd[1] = fnLayer ? 0x27 : 0x11; initCmd[8] = 0x09
+        try command(initCmd)
+
+        let size = 0x240
+        var table = [UInt8](repeating: 0, count: size)
+        for (idx, action) in map {
+            let off = Int(idx) * 4
+            guard idx > 0, off + 3 < size - 2 else { continue }
+            table.replaceSubrange(off..<off + 4, with: action.slot)
+        }
+        // Trailer is 0x55AA little-endian here (AA 55 on the wire), the opposite
+        // byte order from the lighting packets. The firmware silently ignores the
+        // table if this is wrong.
+        table[size - 2] = 0xAA
+        table[size - 1] = 0x55
+        for chunk in stride(from: 0, to: size, by: F108.reportSize) {
+            try setFeature(Array(table[chunk..<chunk + F108.reportSize]))
+            Thread.sleep(forTimeInterval: F108.commandDelay)
+        }
+
+        try apply()
+        try command([0x04, 0xF0])
+    }
+
     // MARK: LCD upload (interface 2)
 
     private func activateLCD() {

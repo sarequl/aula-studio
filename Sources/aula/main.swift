@@ -16,6 +16,14 @@ usage: aula [-v] <command>
   gradient <sunset|ocean|aurora|ember|mono|candy> [--static] [--out file|send]
   light <mode> [RRGGBB] [--brightness 0-5] [--speed 0-5] [--dir 0|1] [--rainbow]
   modes                           list lighting modes
+  keys <key=RRGGBB ...> [--all RRGGBB] [--brightness 0-5]
+                                  per-key colors; keys not given are off (e.g. keys wasd=00FF00 esc=FF0000)
+  keynames                        list key names for `keys` and `remap`
+  remap <key=target ...> [--fn]   set the whole remap layer; keys not given return to factory
+  remap --mac | --windows         Mac layout (cmd next to space) / factory layout
+  remap --reset                   clear both layers
+        targets: a key name, lctrl lshift lalt lwin rctrl rshift ralt rwin cmd option,
+                 play stop prev next volup voldown mute, capslock numlock lock calculator, disabled
 
 Wired USB mode only. Supported: \(KeyboardProfile.all.map(\.name).joined(separator: ", ")).
 The screen holds a limited number of frames; longer media is thinned automatically.
@@ -105,6 +113,51 @@ do {
 
     case "modes":
         for m in LightingMode.allCases { print(m.name.lowercased().replacingOccurrences(of: " ", with: "")) }
+
+    case "keynames":
+        print(KeyLayout.f108Pro.keys.map(\.name).joined(separator: " "))
+
+    case "keys":
+        let brightness = UInt8(option("--brightness") ?? "5") ?? 5
+        var colors: [UInt8: (r: UInt8, g: UInt8, b: UInt8)] = [:]
+        let layout = KeyLayout.f108Pro
+        if let all = option("--all").flatMap(parseHex) {
+            for k in layout.keys { colors[k.light] = all }
+        }
+        for a in args {
+            let parts = a.split(separator: "=", maxSplits: 1)
+            guard parts.count == 2, let c = parseHex(String(parts[1])) else { fail("bad assignment \(a); use key=RRGGBB") }
+            let names = String(parts[0]).lowercased()
+            // A run of single letters like "wasd" means each letter.
+            let list = layout.key(named: names) != nil ? [names] : names.map { String($0) }
+            for n in list {
+                guard let k = layout.key(named: n) else { fail("unknown key \(n); see `aula keynames`") }
+                colors[k.light] = c
+            }
+        }
+        try openDevice().setPerKeyColors(colors, brightness: brightness)
+        print("\(colors.count) keys set")
+
+    case "remap":
+        let layout = KeyLayout.f108Pro
+        let dev = openDevice()
+        if flag("--reset") {
+            try dev.setRemap([:], fnLayer: false)
+            try dev.setRemap([:], fnLayer: true)
+            print("both layers reset to factory")
+            break
+        }
+        let fn = flag("--fn")
+        var map: KeyMap = flag("--mac") ? RemapPresets.mac : [:]
+        _ = flag("--windows")
+        for a in args {
+            let parts = a.split(separator: "=", maxSplits: 1)
+            guard parts.count == 2, let k = layout.key(named: String(parts[0])) else { fail("unknown key in \(a); see `aula keynames`") }
+            guard let t = KeyAction.named(String(parts[1])) else { fail("unknown target in \(a)") }
+            map[k.light] = t
+        }
+        try dev.setRemap(map, fnLayer: fn)
+        print("\(fn ? "FN" : "normal") layer: \(map.count) keys remapped, the rest factory")
 
     case "light":
         guard let name = args.first, let mode = LightingMode.named(name) else { fail("unknown mode; see `aula modes`") }

@@ -6,7 +6,7 @@ import SwiftUI
 
 /// Sidebar destinations. (Not called `Section` so SwiftUI's `Section` stays usable.)
 enum Pane: String, CaseIterable, Identifiable {
-    case screen, library, text, lighting, clock
+    case screen, library, text, lighting, keys, remap, clock
     var id: String { rawValue }
     var title: String { rawValue.capitalized }
     var icon: String {
@@ -15,6 +15,8 @@ enum Pane: String, CaseIterable, Identifiable {
         case .library: "square.stack"
         case .text: "textformat"
         case .lighting: "light.max"
+        case .keys: "keyboard"
+        case .remap: "arrow.triangle.swap"
         case .clock: "clock"
         }
     }
@@ -125,6 +127,29 @@ final class AppModel {
     var lighting = LightingConfig(mode: .spectrum, red: 0, green: 200, blue: 255, brightness: 4, speed: 3)
     var liveLighting = true
 
+    // Keys (per-key color painter, see KeysView.swift)
+    var keyColors: [UInt8: RGB] = [:] { didSet { keysChanged() } }
+    var keyBrightness: UInt8 = 5 { didSet { keysChanged() } }
+    var liveKeys = true
+    var keyBrushColor = RGB(r: 0, g: 200, b: 255)
+    var keyErasing = false
+    var keyPrimary = RGB(r: 0, g: 200, b: 255)
+    var keySecondary = RGB(r: 255, g: 0, b: 160)
+    var keyMaps: [KeyMap] = []
+    var keysTask: Task<Void, Never>?
+    var keysLoaded = false
+
+    // Remap (see RemapView.swift)
+    var remapNormal: [UInt8: KeyAction] = [:] { didSet { remapChanged(.normal) } }
+    var remapFn: [UInt8: KeyAction] = [:] { didSet { remapChanged(.fn) } }
+    var remapLayer: RemapLayer = .normal
+    /// Off by default: remapping a modifier mid-edit changes what the keyboard types right away.
+    var liveRemap = false
+    var remapTask: Task<Void, Never>?
+    /// Layers changed since the last debounced save, sent together when applying as you change.
+    var remapDirty: Set<RemapLayer> = []
+    var remapLoaded = false
+
     // Clock
     var lastClockSync: Date?
 
@@ -160,6 +185,8 @@ final class AppModel {
         videoFPS = defaultVideoFPS
         refreshConnection()
         scheduleTextRender(debounce: false)
+        loadKeyMaps()
+        loadRemaps()
 
         pendingSelfTest = Self.defaults.bool(forKey: "selftest-library")
         // `AulaStudio -open file.gif` loads that file at launch. (A bare path argument would be
@@ -209,12 +236,12 @@ final class AppModel {
         }
     }
 
-    private func showNotWired() {
+    func showNotWired() {
         show((connection == .wireless ? AulaError.wirelessOnly : AulaError.notFound).localizedDescription, error: true)
     }
 
     /// Runs a device operation on the serial device queue.
-    private func withDevice(_ label: String, quiet: Bool = false, onSuccess: (() -> Void)? = nil,
+    func withDevice(_ label: String, quiet: Bool = false, onSuccess: (() -> Void)? = nil,
                             _ work: @escaping (AulaDevice) throws -> Void) {
         busy = true
         deviceQueue.async {
