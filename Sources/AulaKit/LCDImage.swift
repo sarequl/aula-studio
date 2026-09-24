@@ -26,15 +26,14 @@ public struct SourceMedia {
 
 /// Frames rendered at the screen's 240x135 resolution, ready to encode.
 public struct LCDImage {
+    public var profile: KeyboardProfile
     public var frames: [CGImage]
     public var delays: [Double]
     /// Frame count of the source before any reduction to fit the limit.
     public var sourceFrameCount: Int
 
     public var totalDuration: Double { delays.reduce(0, +) }
-    public var pageCount: Int {
-        (F108.headerBytes + frames.count * F108.frameBytes + F108.pageSize - 1) / F108.pageSize
-    }
+    public var pageCount: Int { profile.pageCount(frames: frames.count) }
     /// Rough wall-clock upload time (64 interrupt packets per page at 1 ms each, plus overhead).
     public var estimatedUploadSeconds: Double { Double(pageCount) * 0.07 + 1 }
 }
@@ -43,10 +42,10 @@ public struct LCDImage {
 
 public enum MediaLoader {
     /// Loads GIF / PNG / JPEG / HEIC / WebP / APNG via ImageIO, or a video via AVFoundation.
-    public static func load(_ url: URL, videoFPS: Double = 15) async throws -> SourceMedia {
+    public static func load(_ url: URL, videoFPS: Double = 15, maxFrames: Int = KeyboardProfile.f108Pro.maxFrames) async throws -> SourceMedia {
         let type = UTType(filenameExtension: url.pathExtension.lowercased())
         if let type, type.conforms(to: .movie) || type.conforms(to: .video) {
-            return try await loadVideo(url, fps: videoFPS)
+            return try await loadVideo(url, fps: videoFPS, maxFrames: maxFrames)
         }
         return try loadImage(url)
     }
@@ -87,13 +86,13 @@ public enum MediaLoader {
         return 0.1
     }
 
-    static func loadVideo(_ url: URL, fps: Double) async throws -> SourceMedia {
+    static func loadVideo(_ url: URL, fps: Double, maxFrames: Int) async throws -> SourceMedia {
         let asset = AVURLAsset(url: url)
         let duration = try await asset.load(.duration).seconds
         guard duration.isFinite, duration > 0 else { throw AulaError.badBuffer("video has no duration") }
 
         // Never sample more than the keyboard can store.
-        let count = max(1, min(F108.maxFrames, Int((duration * fps).rounded(.down))))
+        let count = max(1, min(maxFrames, Int((duration * fps).rounded(.down))))
         let step = duration / Double(count)
 
         let gen = AVAssetImageGenerator(asset: asset)
@@ -119,13 +118,13 @@ extension LCDImage {
     /// fits the 141-frame limit (the dropped frames' time is folded into their neighbours
     /// so playback speed is preserved).
     public static func render(_ media: SourceMedia, mode: ScaleMode, background: CGColor? = nil,
-                              speed: Double = 1.0) throws -> LCDImage {
+                              speed: Double = 1.0, profile: KeyboardProfile = .f108Pro) throws -> LCDImage {
         let n = media.frames.count
         var picked: [(CGImage, Double)] = []
-        if n <= F108.maxFrames {
+        if n <= profile.maxFrames {
             picked = zip(media.frames, media.delays).map { ($0, $1) }
         } else {
-            let keep = F108.maxFrames
+            let keep = profile.maxFrames
             for k in 0..<keep {
                 let lo = k * n / keep, hi = (k + 1) * n / keep
                 picked.append((media.frames[lo], media.delays[lo..<hi].reduce(0, +)))
@@ -135,17 +134,17 @@ extension LCDImage {
         let bg = background ?? CGColor(red: 0, green: 0, blue: 0, alpha: 1)
         var frames: [CGImage] = []
         for (img, _) in picked {
-            guard let r = renderFrame(img, mode: mode, background: bg) else {
+            guard let r = renderFrame(img, mode: mode, background: bg, profile: profile) else {
                 throw AulaError.badBuffer("failed to render frame")
             }
             frames.append(r)
         }
         let s = max(speed, 0.05)
-        return LCDImage(frames: frames, delays: picked.map { $0.1 / s }, sourceFrameCount: n)
+        return LCDImage(profile: profile, frames: frames, delays: picked.map { $0.1 / s }, sourceFrameCount: n)
     }
 
-    static func renderFrame(_ img: CGImage, mode: ScaleMode, background: CGColor) -> CGImage? {
-        let w = F108.screenWidth, h = F108.screenHeight
+    static func renderFrame(_ img: CGImage, mode: ScaleMode, background: CGColor, profile: KeyboardProfile) -> CGImage? {
+        let w = profile.screenWidth, h = profile.screenHeight
         guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
                                   space: CGColorSpace(name: CGColorSpace.sRGB)!,
                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
@@ -169,21 +168,20 @@ extension LCDImage {
     }
 
     /// Solid color, handy for testing the upload path.
-    public static func solid(red: UInt8, green: UInt8, blue: UInt8) -> LCDImage {
+    public static func solid(red: UInt8, green: UInt8, blue: UInt8, profile: KeyboardProfile = .f108Pro) -> LCDImage {
         let c = CGColor(red: CGFloat(red) / 255, green: CGFloat(green) / 255, blue: CGFloat(blue) / 255, alpha: 1)
-        let ctx = CGContext(data: nil, width: F108.screenWidth, height: F108.screenHeight, bitsPerComponent: 8,
-                            bytesPerRow: F108.screenWidth * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-        ctx.setFillColor(c)
-        ctx.fill(CGRect(x: 0, y: 0, width: F108.screenWidth, height: F108.screenHeight))
-        return LCDImage(frames: [ctx.makeImage()!], delays: [1], sourceFrameCount: 1)
+        let img = Canvas.draw(profile: profile) { ctx, w, h in
+            ctx.setFillColor(c)
+            ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        }
+        return LCDImage(profile: profile, frames: [img], delays: [1], sourceFrameCount: 1)
     }
 
     /// Keyboard format: 256-byte header (frame count, per-frame delay in 20 ms units,
     /// 0xFF padding), then RGB565 little-endian frames, padded with 0xFF to 4 KB pages.
     public func encode() throws -> Data {
         guard !frames.isEmpty else { throw AulaError.badBuffer("no frames") }
-        guard frames.count <= F108.maxFrames else { throw AulaError.tooManyFrames(frames.count) }
+        guard frames.count <= profile.maxFrames else { throw AulaError.tooManyFrames(frames.count, limit: profile.maxFrames) }
 
         var buf = [UInt8](repeating: 0xFF, count: pageCount * F108.pageSize)
         buf[0] = UInt8(frames.count)
@@ -191,7 +189,8 @@ extension LCDImage {
             buf[1 + i] = UInt8(max(1, min(255, Int((d * 50).rounded()))))
         }
 
-        let w = F108.screenWidth, h = F108.screenHeight
+        let w = profile.screenWidth, h = profile.screenHeight
+        let frameBytes = profile.frameBytes
         var rgba = [UInt8](repeating: 0, count: w * h * 4)
         for (fi, frame) in frames.enumerated() {
             rgba.withUnsafeMutableBytes { ptr in
@@ -200,7 +199,7 @@ extension LCDImage {
                                     bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
                 ctx.draw(frame, in: CGRect(x: 0, y: 0, width: w, height: h))
             }
-            var o = F108.headerBytes + fi * F108.frameBytes
+            var o = F108.headerBytes + fi * frameBytes
             for p in 0..<(w * h) {
                 let r = UInt16(rgba[p * 4]), g = UInt16(rgba[p * 4 + 1]), b = UInt16(rgba[p * 4 + 2])
                 let px = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
@@ -210,5 +209,18 @@ extension LCDImage {
             }
         }
         return Data(buf)
+    }
+}
+
+/// Small helper for drawing a single screen-sized frame.
+enum Canvas {
+    static func draw(profile: KeyboardProfile, _ body: (CGContext, Int, Int) -> Void) -> CGImage {
+        let w = profile.screenWidth, h = profile.screenHeight
+        let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.interpolationQuality = .high
+        body(ctx, w, h)
+        return ctx.makeImage()!
     }
 }

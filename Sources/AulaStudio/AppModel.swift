@@ -8,6 +8,8 @@ import SwiftUI
 final class AppModel {
     // Connection
     var connection: ConnectionState = .absent
+    /// Detected model, or the default when nothing is plugged in.
+    var profile: KeyboardProfile = .f108Pro
     var busy = false
     var toast: Toast?
 
@@ -60,7 +62,9 @@ final class AppModel {
 
     func refreshConnection() {
         let old = connection
-        connection = currentConnectionState()
+        let detected = detectKeyboard()
+        connection = detected?.1 ?? .absent
+        if let p = detected?.0, p != profile { profile = p; rerender() }
         if old != .wired, connection == .wired, autoSyncClock, !busy {
             syncClock(quiet: true)
         }
@@ -125,7 +129,7 @@ final class AppModel {
         Task {
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             do {
-                let media = try await MediaLoader.load(url, videoFPS: fps)
+                let media = try await MediaLoader.load(url, videoFPS: fps, maxFrames: profile.maxFrames)
                 source = media
                 rerender()
             } catch {
@@ -141,11 +145,11 @@ final class AppModel {
 
     func rerender() {
         guard let media = source else { return }
-        let mode = scaleMode, speed = playbackSpeed
+        let mode = scaleMode, speed = playbackSpeed, profile = profile
         renderTask?.cancel()
         loading = true
         renderTask = Task.detached(priority: .userInitiated) {
-            let result = Result { try LCDImage.render(media, mode: mode, speed: speed) }
+            let result = Result { try LCDImage.render(media, mode: mode, speed: speed, profile: profile) }
             await MainActor.run {
                 guard !Task.isCancelled else { return }
                 self.loading = false

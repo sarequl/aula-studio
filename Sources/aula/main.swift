@@ -12,10 +12,13 @@ usage: aula [-v] <command>
   screen --color RRGGBB           upload a solid color
   preview <file> <out.png|out.gif> [mode]
                                   render what the screen will show (no keyboard needed)
+  text "Hello" [--font Name] [--size N] [--color RRGGBB] [--bg RRGGBB] [--scroll px/s] [--out file|send]
+  gradient <sunset|ocean|aurora|ember|mono|candy> [--static] [--out file|send]
   light <mode> [RRGGBB] [--brightness 0-5] [--speed 0-5] [--dir 0|1] [--rainbow]
   modes                           list lighting modes
 
-Wired USB mode only. The screen holds at most \(F108.maxFrames) frames; longer media is thinned automatically.
+Wired USB mode only. Supported: \(KeyboardProfile.all.map(\.name).joined(separator: ", ")).
+The screen holds a limited number of frames; longer media is thinned automatically.
 """
 
 var args = Array(CommandLine.arguments.dropFirst())
@@ -64,16 +67,36 @@ func loadLCD(_ path: String, mode: ScaleMode, speed: Double, fps: Double) async 
     return img
 }
 
+func writePreview(_ img: LCDImage, to out: URL) throws {
+    if out.pathExtension.lowercased() == "bin" {
+        try img.encode().write(to: out)
+        return
+    }
+    let isGIF = out.pathExtension.lowercased() == "gif"
+    let count = isGIF ? img.frames.count : 1
+    guard let dest = CGImageDestinationCreateWithURL(out as CFURL, (isGIF ? "com.compuserve.gif" : "public.png") as CFString, count, nil) else {
+        fail("cannot write \(out.path)")
+    }
+    if isGIF {
+        CGImageDestinationSetProperties(dest, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
+    }
+    for i in 0..<count {
+        let props = [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: img.delays[i]]] as CFDictionary
+        CGImageDestinationAddImage(dest, img.frames[i], isGIF ? props : nil)
+    }
+    CGImageDestinationFinalize(dest)
+}
+
 guard let cmd = args.first else { print(usage); exit(0) }
 args.removeFirst()
 
 do {
     switch cmd {
     case "status":
-        switch currentConnectionState() {
-        case .wired: print("wired USB: ready")
-        case .wireless: print("Bluetooth/2.4G: connect the USB cable and switch to wired mode to configure")
-        case .absent: print("not found")
+        switch detectKeyboard() {
+        case (let p, .wired)?: print("\(p.name) on USB: ready")
+        case (let p, _)?: print("\(p.name) on Bluetooth/2.4G: connect the USB cable and switch to wired mode to configure")
+        case nil: print("not found")
         }
 
     case "clock":
@@ -102,27 +125,32 @@ do {
         let mode = args.count > 2 ? (ScaleMode(rawValue: args[2]) ?? .fill) : .fill
         let img = try await loadLCD(args[0], mode: mode, speed: speed, fps: fps)
         let data = try img.encode()
-        let out = URL(fileURLWithPath: args[1])
-        if out.pathExtension.lowercased() == "bin" {
-            try data.write(to: out)
-            print("raw keyboard buffer written to \(out.path) (\(data.count) bytes)")
-            exit(0)
-        }
-        let isGIF = out.pathExtension.lowercased() == "gif"
-        let count = isGIF ? img.frames.count : 1
-        guard let dest = CGImageDestinationCreateWithURL(out as CFURL, (isGIF ? "com.compuserve.gif" : "public.png") as CFString, count, nil) else {
-            fail("cannot write \(out.path)")
-        }
-        if isGIF {
-            CGImageDestinationSetProperties(dest, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
-        }
-        for i in 0..<count {
-            let props = [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: img.delays[i]]] as CFDictionary
-            CGImageDestinationAddImage(dest, img.frames[i], isGIF ? props : nil)
-        }
-        CGImageDestinationFinalize(dest)
+        try writePreview(img, to: URL(fileURLWithPath: args[1]))
         print("\(img.frames.count) frames, \(String(format: "%.1f", img.totalDuration)) s loop, \(data.count) bytes, \(img.pageCount) pages")
-        print("preview written to \(out.path)")
+        print("preview written to \(args[1])")
+
+    case "text", "gradient":
+        let out = option("--out") ?? "send"
+        let img: LCDImage
+        if cmd == "text" {
+            guard let t = args.first else { fail(usage) }
+            var st = Generators.TextStyle(text: t)
+            if let f = option("--font") { st.fontName = f }
+            if let n = option("--size").flatMap(Double.init) { st.fontSize = n }
+            if let c = option("--color").flatMap(parseHex) { st.color = c }
+            if let c = option("--bg").flatMap(parseHex) { st.background = c }
+            if let v = option("--scroll").flatMap(Double.init) { st.scrollSpeed = v }
+            img = Generators.text(st)
+        } else {
+            guard let name = args.first, let p = Generators.Preset(rawValue: name) else { fail("unknown preset") }
+            img = Generators.gradient(p, animated: !flag("--static"))
+        }
+        if out == "send" {
+            let data = try img.encode()
+            try openDevice().uploadScreen(data) { s, t in if s == t { print("\(t) pages sent") } }
+        } else {
+            try writePreview(img, to: URL(fileURLWithPath: out))
+        }
 
     case "screen":
         let speed = Double(option("--speed") ?? "1") ?? 1

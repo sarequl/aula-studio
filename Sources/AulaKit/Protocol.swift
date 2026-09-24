@@ -1,17 +1,11 @@
 import Foundation
 
-/// Wire-level constants for the AULA F108 Pro.
+/// Wire-level constants of the AULA screen-keyboard protocol. Per-model values live in
+/// `KeyboardProfile`.
 ///
 /// Protocol source: https://github.com/parsiya/f108-pro (Ghidra + USB capture of the
 /// vendor Windows app, verified on hardware).
 public enum F108 {
-    public static let vendorID = 0x0C45   // Sonix, wired USB mode
-    public static let productID = 0x800A
-
-    /// Bluetooth / 2.4G presence. The vendor protocol does not work over these.
-    public static let wirelessVendorID = 0x05AC
-    public static let wirelessProductID = 0x024F
-
     /// Interface 3: 64-byte feature reports (begin/apply, lighting, clock, LCD header).
     static let configUsagePage = 0xFF13
     /// Interface 2: 4096-byte output reports on the interrupt OUT pipe (LCD pixels),
@@ -24,16 +18,7 @@ public enum F108 {
     /// From the vendor app's config.xml (`cmd_delaytime`).
     static let commandDelay: TimeInterval = 0.035
 
-    public static let screenWidth = 240
-    public static let screenHeight = 135
-    static let frameBytes = screenWidth * screenHeight * 2
     static let headerBytes = 256
-
-    /// `gif_maxframes` from the vendor config. The firmware does NOT bounds-check:
-    /// anything past this spills into the SPI flash region holding the knob-menu
-    /// graphics and destroys them permanently. Never raise this.
-    public static let maxFrames = 141
-    static let maxPages = (headerBytes + maxFrames * frameBytes + pageSize - 1) / pageSize
 }
 
 public enum LightingMode: Int, CaseIterable, Identifiable, Sendable {
@@ -106,7 +91,7 @@ public enum AulaError: LocalizedError {
     case wirelessOnly
     case interfaceMissing(String)
     case io(String, Int32)
-    case tooManyFrames(Int)
+    case tooManyFrames(Int, limit: Int)
     case badBuffer(String)
 
     public var errorDescription: String? {
@@ -119,8 +104,8 @@ public enum AulaError: LocalizedError {
             "Keyboard found but its \(which) interface is missing."
         case .io(let what, let code):
             String(format: "%@ failed (IOReturn 0x%08X)", what, UInt32(bitPattern: code))
-        case .tooManyFrames(let n):
-            "\(n) frames exceeds the keyboard's \(F108.maxFrames)-frame limit. Uploading more would overwrite the menu graphics in the keyboard's flash."
+        case .tooManyFrames(let n, let limit):
+            "\(n) frames exceeds the keyboard's \(limit)-frame limit. Uploading more would overwrite the menu graphics in the keyboard's flash."
         case .badBuffer(let why):
             "Invalid image buffer: \(why)"
         }

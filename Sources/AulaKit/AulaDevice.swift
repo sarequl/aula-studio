@@ -27,18 +27,31 @@ private func stringProperty(_ device: IOHIDDevice, _ key: String) -> String? {
     IOHIDDeviceGetProperty(device, key as CFString) as? String
 }
 
-public func currentConnectionState() -> ConnectionState {
-    if !matchingDevices(vendor: F108.vendorID, product: F108.productID).isEmpty { return .wired }
-    // The wireless modes reuse Apple's VID, so also check the product name.
-    let wireless = matchingDevices(vendor: F108.wirelessVendorID, product: F108.wirelessProductID)
-    if wireless.contains(where: { (stringProperty($0, kIOHIDProductKey) ?? "").uppercased().contains("F108") }) {
-        return .wireless
+/// The first profile that is present over USB, or over wireless.
+public func detectKeyboard() -> (KeyboardProfile, ConnectionState)? {
+    for p in KeyboardProfile.all where !matchingDevices(vendor: p.vendorID, product: p.productID).isEmpty {
+        return (p, .wired)
     }
-    return .absent
+    for p in KeyboardProfile.all {
+        guard let wv = p.wirelessVendorID, let wp = p.wirelessProductID else { continue }
+        // The wireless ids reuse Apple's VID, so also check the product name.
+        let wireless = matchingDevices(vendor: wv, product: wp)
+        let tag = p.name.uppercased().replacingOccurrences(of: "AULA ", with: "").replacingOccurrences(of: " ", with: "")
+        if wireless.contains(where: { (stringProperty($0, kIOHIDProductKey) ?? "").uppercased()
+                .replacingOccurrences(of: " ", with: "").contains(tag) }) {
+            return (p, .wireless)
+        }
+    }
+    return nil
+}
+
+public func currentConnectionState() -> ConnectionState {
+    detectKeyboard()?.1 ?? .absent
 }
 
 /// An open, wired AULA F108 Pro. Not thread-safe: drive it from one thread at a time.
 public final class AulaDevice {
+    public let profile: KeyboardProfile
     private let config: IOHIDDevice
     private let lcd: IOHIDDevice
     private var lcdActivated = false
@@ -49,8 +62,13 @@ public final class AulaDevice {
     /// Called with human-readable protocol traces. Useful for `--verbose`.
     public var log: ((String) -> Void)?
 
-    public init() throws {
-        let devices = matchingDevices(vendor: F108.vendorID, product: F108.productID)
+    /// Opens the given model, or whichever supported model is plugged in.
+    public init(profile: KeyboardProfile? = nil) throws {
+        guard let profile = profile ?? detectKeyboard().flatMap({ $0.1 == .wired ? $0.0 : nil }) else {
+            throw currentConnectionState() == .wireless ? AulaError.wirelessOnly : AulaError.notFound
+        }
+        self.profile = profile
+        let devices = matchingDevices(vendor: profile.vendorID, product: profile.productID)
         if devices.isEmpty {
             throw currentConnectionState() == .wireless ? AulaError.wirelessOnly : AulaError.notFound
         }
@@ -195,10 +213,10 @@ public final class AulaDevice {
         }
         let frames = Int(buffer[buffer.startIndex])
         guard frames >= 1 else { throw AulaError.badBuffer("zero frames") }
-        guard frames <= F108.maxFrames else { throw AulaError.tooManyFrames(frames) }
+        guard frames <= profile.maxFrames else { throw AulaError.tooManyFrames(frames, limit: profile.maxFrames) }
         let pages = buffer.count / F108.pageSize
-        let expectedPages = (F108.headerBytes + frames * F108.frameBytes + F108.pageSize - 1) / F108.pageSize
-        guard pages == expectedPages, pages <= F108.maxPages else {
+        let expectedPages = profile.pageCount(frames: frames)
+        guard pages == expectedPages, pages <= profile.maxPages else {
             throw AulaError.badBuffer("\(pages) pages for \(frames) frames (expected \(expectedPages))")
         }
 

@@ -105,7 +105,7 @@ struct ScreenView: View {
                 stat(duration(img.estimatedUploadSeconds), "upload time")
             }
             if img.sourceFrameCount > img.frames.count {
-                Label("The keyboard stores at most \(F108.maxFrames) frames, so \(img.sourceFrameCount) frames were thinned to \(img.frames.count). Playback speed is kept.",
+                Label("The keyboard stores at most \(img.profile.maxFrames) frames, so \(img.sourceFrameCount) frames were thinned to \(img.frames.count). Playback speed is kept.",
                       systemImage: "info.circle")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -144,7 +144,7 @@ struct ScreenView: View {
                         Text("\(Int(model.videoFPS)) fps").monospacedDigit().frame(width: 50, alignment: .trailing)
                     }
                 }
-                Text("Clips are capped at \(F108.maxFrames) frames. Higher frame rates mean a shorter loop.")
+                Text("Clips are capped at \(model.profile.maxFrames) frames. Higher frame rates mean a shorter loop.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
