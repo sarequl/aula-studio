@@ -30,7 +30,7 @@ AULA ships Windows-only software for its screen keyboards. This is a native Mac 
 
 ## Install
 
-Download the `.dmg` from the [latest release](https://github.com/sarequl/aula-keyboard/releases), open it and drag Aula Studio to Applications.
+Download the `.dmg` from the [latest release](https://github.com/sarequl/aula-studio/releases), open it and drag Aula Studio to Applications.
 
 The app isn't notarized (no Apple Developer subscription behind it yet), so macOS blocks the first launch. Open it once, dismiss the warning, then go to **System Settings → Privacy & Security**, scroll down and click **Open Anyway**. You only do this once. If you'd rather skip the dialog:
 
@@ -43,8 +43,8 @@ Requires macOS 14 or later.
 ### Build from source
 
 ```bash
-git clone https://github.com/sarequl/aula-keyboard.git
-cd aula-keyboard
+git clone https://github.com/sarequl/aula-studio.git
+cd aula-studio
 ./scripts/bundle.sh
 ```
 
@@ -99,6 +99,8 @@ The firmware does no bounds checking. The F108 Pro's flash slot holds 141 frames
 
 ## Adding a model
 
+Have another AULA screen keyboard? [Open an issue](https://github.com/sarequl/aula-studio/issues) with the model name and the output of `ioreg -p IOUSB -l | grep -A3 -i aula`, and we'll work out a profile together.
+
 Other AULA screen keyboards (F99, F87 Pro, S99, F75 Max and friends) use the same command set with different USB ids, screen sizes and flash slots. To add one, append a `KeyboardProfile` in [KeyboardProfile.swift](Sources/AulaKit/KeyboardProfile.swift) with:
 
 - wired VID/PID (`ioreg -p IOUSB -l | grep -A3 -i aula` while plugged in)
@@ -124,6 +126,10 @@ scripts/make-icon.swift  regenerates the app icon
 ## Credits
 
 The protocol comes from [parsiya/f108-pro](https://github.com/parsiya/f108-pro): Ghidra work on the Windows driver, USB captures and hardware verification, including the flash-overflow finding above. This project would not exist without it.
+
+## Support
+
+If this saved you a Windows VM, [sponsoring on GitHub](https://github.com/sponsors/sarequl) helps cover an Apple Developer ID so releases can be notarized.
 
 ## License
 

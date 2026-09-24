@@ -4,7 +4,7 @@ import SwiftUI
 
 enum Links {
     static let protocolNotes = URL(string: "https://github.com/parsiya/f108-pro")!
-    static let repo = URL(string: "https://github.com/sarequl/aula-keyboard")!
+    static let repo = URL(string: "https://github.com/sarequl/aula-studio")!
 }
 
 enum Format {
