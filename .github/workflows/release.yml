@@ -1,0 +1,22 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build DMG
+        run: VERSION="${GITHUB_REF_NAME#v}" ./scripts/dmg.sh
+      - name: Build zip
+        run: cd dist && zip -r -y "AulaStudio-${GITHUB_REF_NAME#v}.zip" AulaStudio.app
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.dmg dist/*.zip \
+            --title "Aula Studio ${GITHUB_REF_NAME#v}" \
+            --notes "Unsigned build. After the first launch is blocked, open System Settings → Privacy & Security and click Open Anyway. See the README for details."

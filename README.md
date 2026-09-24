@@ -30,7 +30,13 @@ AULA ships Windows-only software for its screen keyboards. This is a native Mac 
 
 ## Install
 
-Download `AulaStudio.zip` from the [latest release](https://github.com/sarequl/aula-keyboard/releases), unzip it and drag `AulaStudio.app` to Applications. The app isn't notarized, so on first launch right-click it and choose Open.
+Download the `.dmg` from the [latest release](https://github.com/sarequl/aula-keyboard/releases), open it and drag Aula Studio to Applications.
+
+The app isn't notarized (no Apple Developer subscription behind it yet), so macOS blocks the first launch. Open it once, dismiss the warning, then go to **System Settings → Privacy & Security**, scroll down and click **Open Anyway**. You only do this once. If you'd rather skip the dialog:
+
+```bash
+xattr -d com.apple.quarantine /Applications/AulaStudio.app
+```
 
 Requires macOS 14 or later.
 
@@ -109,6 +115,7 @@ Sources/AulaKit      profiles, protocol, IOKit transport, media decoding, genera
 Sources/aula         command-line tool
 Sources/AulaStudio   SwiftUI app
 scripts/bundle.sh    builds the .app bundle
+scripts/dmg.sh       wraps it in a drag-to-Applications .dmg (what releases ship)
 scripts/make-icon.swift  regenerates the app icon
 ```
 
