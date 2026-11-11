@@ -21,6 +21,15 @@ public struct SourceMedia {
     public var frames: [CGImage]
     /// Seconds each frame stays on screen.
     public var delays: [Double]
+    /// Frame count of the original file, before the loader thinned it to the frame limit.
+    public var sourceFrameCount: Int
+
+    public init(frames: [CGImage], delays: [Double], sourceFrameCount: Int? = nil) {
+        self.frames = frames
+        self.delays = delays
+        self.sourceFrameCount = max(sourceFrameCount ?? frames.count, frames.count)
+    }
+
     public var pixelSize: CGSize { frames.first.map { CGSize(width: $0.width, height: $0.height) } ?? .zero }
 }
 
@@ -47,27 +56,58 @@ public enum MediaLoader {
         if let type, type.conforms(to: .movie) || type.conforms(to: .video) {
             return try await loadVideo(url, fps: videoFPS, maxFrames: maxFrames)
         }
-        return try loadImage(url)
+        return try loadImage(url, maxFrames: maxFrames)
     }
 
-    static func loadImage(_ url: URL) throws -> SourceMedia {
+    /// Picks `keep` evenly spaced indices out of `n`, folding each skipped frame's time into
+    /// the kept one before it so the loop keeps its length.
+    static func thin(_ delays: [Double], keep: Int) -> [(index: Int, delay: Double)] {
+        let n = delays.count
+        guard n > keep, keep > 0 else { return delays.enumerated().map { ($0.offset, $0.element) } }
+        return (0..<keep).map { k in
+            let lo = k * n / keep, hi = (k + 1) * n / keep
+            return (lo, delays[lo..<hi].reduce(0, +))
+        }
+    }
+
+    static func loadImage(_ url: URL, maxFrames: Int = KeyboardProfile.f108Pro.maxFrames) throws -> SourceMedia {
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else {
             throw AulaError.badBuffer("could not read \(url.lastPathComponent)")
         }
         let count = CGImageSourceGetCount(src)
         guard count > 0 else { throw AulaError.badBuffer("\(url.lastPathComponent) has no frames") }
 
+        // Only decode the frames the keyboard can hold: reading delays is cheap, decoding is not.
+        let all = (0..<count).map { frameDelay(src, $0) }
+        let picked = thin(all, keep: maxFrames)
+
+        // ImageIO ignores EXIF orientation when decoding; a thumbnail at full size applies it.
+        let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any] ?? [:]
+        let orientation = props[kCGImagePropertyOrientation] as? Int ?? 1
+        let pw = props[kCGImagePropertyPixelWidth] as? Int ?? 0
+        let ph = props[kCGImagePropertyPixelHeight] as? Int ?? 0
+        let rotate = count == 1 && orientation != 1
+        let thumbOpts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: max(pw, ph, 1),
+        ]
+
         var frames: [CGImage] = []
         var delays: [Double] = []
+        frames.reserveCapacity(picked.count)
         // ImageIO composites animated GIF/APNG/WebP frames (disposal, partial frames) for us.
-        for i in 0..<count {
-            guard let img = CGImageSourceCreateImageAtIndex(src, i, nil) else { continue }
+        for (i, d) in picked {
+            let img = rotate
+                ? CGImageSourceCreateThumbnailAtIndex(src, i, thumbOpts as CFDictionary)
+                : CGImageSourceCreateImageAtIndex(src, i, nil)
+            guard let img else { continue }
             frames.append(img)
-            delays.append(frameDelay(src, i))
+            delays.append(d)
         }
         guard !frames.isEmpty else { throw AulaError.badBuffer("could not decode \(url.lastPathComponent)") }
         if frames.count == 1 { delays = [1.0] }
-        return SourceMedia(frames: frames, delays: delays)
+        return SourceMedia(frames: frames, delays: delays, sourceFrameCount: count)
     }
 
     private static func frameDelay(_ src: CGImageSource, _ i: Int) -> Double {
@@ -101,11 +141,17 @@ public enum MediaLoader {
         gen.requestedTimeToleranceAfter = CMTime(seconds: step / 2, preferredTimescale: 600)
         gen.maximumSize = CGSize(width: 960, height: 540)
 
+        // A single batched request avoids a seek per frame.
+        let times = (0..<count).map { CMTime(seconds: Double($0) * step, preferredTimescale: 600) }
+        func key(_ t: CMTime) -> Int64 { Int64((t.seconds * 600).rounded()) }
+        var byTime: [Int64: CGImage] = [:]
+        for await result in gen.images(for: times) {
+            if let img = try? result.image { byTime[key(result.requestedTime)] = img }
+        }
         var frames: [CGImage] = []
-        for i in 0..<count {
-            let t = CMTime(seconds: Double(i) * step, preferredTimescale: 600)
-            let (img, _) = try await gen.image(at: t)
-            frames.append(img)
+        frames.reserveCapacity(count)
+        for t in times {
+            if let img = byTime[key(t)] { frames.append(img) } else { frames.append(try await gen.image(at: t).image) }
         }
         return SourceMedia(frames: frames, delays: Array(repeating: step, count: frames.count))
     }
@@ -120,19 +166,11 @@ extension LCDImage {
     public static func render(_ media: SourceMedia, mode: ScaleMode, background: CGColor? = nil,
                               speed: Double = 1.0, profile: KeyboardProfile = .f108Pro) throws -> LCDImage {
         let n = media.frames.count
-        var picked: [(CGImage, Double)] = []
-        if n <= profile.maxFrames {
-            picked = zip(media.frames, media.delays).map { ($0, $1) }
-        } else {
-            let keep = profile.maxFrames
-            for k in 0..<keep {
-                let lo = k * n / keep, hi = (k + 1) * n / keep
-                picked.append((media.frames[lo], media.delays[lo..<hi].reduce(0, +)))
-            }
-        }
+        let picked = MediaLoader.thin(media.delays, keep: profile.maxFrames).map { (media.frames[$0.index], $0.delay) }
 
         let bg = background ?? CGColor(red: 0, green: 0, blue: 0, alpha: 1)
         var frames: [CGImage] = []
+        frames.reserveCapacity(picked.count)
         for (img, _) in picked {
             guard let r = renderFrame(img, mode: mode, background: bg, profile: profile) else {
                 throw AulaError.badBuffer("failed to render frame")
@@ -140,13 +178,14 @@ extension LCDImage {
             frames.append(r)
         }
         let s = max(speed, 0.05)
-        return LCDImage(profile: profile, frames: frames, delays: picked.map { $0.1 / s }, sourceFrameCount: n)
+        return LCDImage(profile: profile, frames: frames, delays: picked.map { $0.1 / s },
+                        sourceFrameCount: max(n, media.sourceFrameCount))
     }
 
     static func renderFrame(_ img: CGImage, mode: ScaleMode, background: CGColor, profile: KeyboardProfile) -> CGImage? {
         let w = profile.screenWidth, h = profile.screenHeight
         guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
-                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  space: Canvas.sRGB,
                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         ctx.interpolationQuality = .high
         ctx.setFillColor(background)
@@ -191,21 +230,29 @@ extension LCDImage {
 
         let w = profile.screenWidth, h = profile.screenHeight
         let frameBytes = profile.frameBytes
-        var rgba = [UInt8](repeating: 0, count: w * h * 4)
-        for (fi, frame) in frames.enumerated() {
-            rgba.withUnsafeMutableBytes { ptr in
-                let ctx = CGContext(data: ptr.baseAddress, width: w, height: h, bitsPerComponent: 8,
-                                    bytesPerRow: w * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                    bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
-                ctx.draw(frame, in: CGRect(x: 0, y: 0, width: w, height: h))
-            }
-            var o = F108.headerBytes + fi * frameBytes
-            for p in 0..<(w * h) {
-                let r = UInt16(rgba[p * 4]), g = UInt16(rgba[p * 4 + 1]), b = UInt16(rgba[p * 4 + 2])
-                let px = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
-                buf[o] = UInt8(px & 0xFF)
-                buf[o + 1] = UInt8(px >> 8)
-                o += 2
+        // One context reused for every frame.
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
+                                  bytesPerRow: w * 4, space: Canvas.sRGB,
+                                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue),
+              let raw = ctx.data else { throw AulaError.badBuffer("could not allocate frame buffer") }
+        let rgba = raw.bindMemory(to: UInt8.self, capacity: ctx.bytesPerRow * h)
+        let stride = ctx.bytesPerRow
+        let full = CGRect(x: 0, y: 0, width: w, height: h)
+        buf.withUnsafeMutableBufferPointer { out in
+            for (fi, frame) in frames.enumerated() {
+                ctx.clear(full)
+                ctx.draw(frame, in: full)
+                var o = F108.headerBytes + fi * frameBytes
+                for y in 0..<h {
+                    let row = rgba + y * stride
+                    for x in 0..<w {
+                        let r = UInt16(row[x * 4]), g = UInt16(row[x * 4 + 1]), b = UInt16(row[x * 4 + 2])
+                        let px = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
+                        out[o] = UInt8(px & 0xFF)
+                        out[o + 1] = UInt8(px >> 8)
+                        o += 2
+                    }
+                }
             }
         }
         return Data(buf)
@@ -214,10 +261,12 @@ extension LCDImage {
 
 /// Small helper for drawing a single screen-sized frame.
 enum Canvas {
+    static let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
+
     static func draw(profile: KeyboardProfile, _ body: (CGContext, Int, Int) -> Void) -> CGImage {
         let w = profile.screenWidth, h = profile.screenHeight
         let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
-                            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                            space: sRGB,
                             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
         ctx.interpolationQuality = .high
         body(ctx, w, h)
